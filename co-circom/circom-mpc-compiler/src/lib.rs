@@ -397,6 +397,11 @@ where
     }
 
     fn handle_branch_bucket(&mut self, branch_bucket: &BranchBucket) {
+        println!("hit branch at line {}", branch_bucket.line,);
+        println!(
+            "is constant instruction: {}",
+            Self::is_instruction_constant(&branch_bucket.cond)
+        );
         let has_else_branch = !branch_bucket.else_branch.is_empty();
         self.handle_instruction(&branch_bucket.cond);
         let truthy_block = self.handle_inner_body(&branch_bucket.if_branch);
@@ -412,6 +417,65 @@ where
             self.emit_opcode(MpcOpCode::EndTruthyBranch(0));
         }
     }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // START PS HACKING
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    fn is_instruction_constant(instruction: &Instruction) -> bool {
+        match instruction {
+            Instruction::Load(load_bucket) => match &load_bucket.address_type {
+                AddressType::Variable => true,
+                AddressType::Signal => false,
+                AddressType::SubcmpSignal {
+                    cmp_address: address,
+                    ..
+                } => Self::is_instruction_constant(&address),
+            },
+            Instruction::Store(store_bucket) => Self::is_instruction_constant(&store_bucket.src),
+            Instruction::Compute(compute_bucket) => compute_bucket
+                .stack
+                .iter()
+                .all(|inst| Self::is_instruction_constant(inst)),
+            Instruction::Call(call_bucket) => call_bucket
+                .arguments
+                .iter()
+                .all(|inst| Self::is_instruction_constant(inst)),
+            Instruction::Branch(branch_bucket) => {
+                Self::is_instruction_constant(&branch_bucket.cond)
+                    && branch_bucket
+                        .if_branch
+                        .iter()
+                        .all(|inst| Self::is_instruction_constant(inst))
+                    && branch_bucket
+                        .else_branch
+                        .iter()
+                        .all(|inst| Self::is_instruction_constant(inst))
+            }
+            Instruction::Return(return_bucket) => {
+                Self::is_instruction_constant(&return_bucket.value)
+            }
+            Instruction::Assert(assert_bucket) => {
+                Self::is_instruction_constant(&assert_bucket.evaluate)
+            }
+            Instruction::Loop(loop_bucket) => {
+                Self::is_instruction_constant(&loop_bucket.continue_condition)
+                    && loop_bucket
+                        .body
+                        .iter()
+                        .all(|inst| Self::is_instruction_constant(inst))
+            }
+            Instruction::CreateCmp(create_cmp_bucket) => {
+                Self::is_instruction_constant(&create_cmp_bucket.sub_cmp_id)
+            }
+            Instruction::Value(_) => true,
+            Instruction::Log(_) => true,
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // END PS HACKING
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////
 
     fn handle_assert_bucket(&mut self, assert_bucket: &AssertBucket) {
         //evaluate the assertion
@@ -708,6 +772,22 @@ mod tests {
                 .collect::<Vec<_>>()
         };
     }
+
+    #[test]
+    fn test_dummy() {
+        CoCircomCompiler::<Bn254>::parse(
+            "../../test_vectors/WitnessExtension/tests/dummy1.circom".to_owned(),
+            CompilerConfig::default(),
+        )
+        .unwrap();
+
+        CoCircomCompiler::<Bn254>::parse(
+            "../../test_vectors/WitnessExtension/tests/dummy2.circom".to_owned(),
+            CompilerConfig::default(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_get_output_from_finalized_witness() {
         let parsed = CoCircomCompiler::<Bn254>::parse(
